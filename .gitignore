@@ -1,5 +1,5 @@
 **/.vscode/
-
+.DS_Store
 # Built Visual Studio Code Extensions
 *.vsix
 
