@@ -1,202 +1,278 @@
 #!/usr/bin/env python3
-"""Console-based maze search visualizer using BFS and DFS."""
-
-from collections import deque
 
 
-def parse_maze(maze_str):
-    """Convert the multiline text maze into a 2D grid."""
-    lines = maze_str.strip().splitlines()
-    rows = []
-    for line in lines:
-        line = line.strip()
-        if line:
-            row = list(line)
-            rows.append(row)
+from __future__ import annotations
 
-    if len(rows) == 0:
-        raise ValueError("Maze string is empty.")
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, List, Sequence, Tuple
 
-    expected_width = len(rows[0])
-    for row in rows:
-        if len(row) != expected_width:
-            raise ValueError("Maze rows must all be the same length.")
+import pygame
 
-    return rows
+from mazevis import bfs, read_maze, reconstruir
 
+Coord = Tuple[int, int]
+Grid = List[List[str]]
 
-def locate_points(maze):
-    """Find the positions of the start 'A' and goal 'B' in the grid."""
-    start = None
-    goal = None
+CELL_SIZE = 48
+OUTER_MARGIN = 24
+HEADER_HEIGHT = 96
+FONT_SIZE = 20
+FPS = 30
+INFO_WIDTH = 220
+PATH_STEP_MS = 220
+HOLD_AFTER_MAZE_MS = 1400
 
-    for row_index in range(len(maze)):
-        for col_index in range(len(maze[row_index])):
-            cell = maze[row_index][col_index]
-            if cell == "A":
-                start = (row_index, col_index)
-            elif cell == "B":
-                goal = (row_index, col_index)
+COLOR_BG = (20, 23, 32)
+COLOR_FLOOR = (223, 223, 223)
+COLOR_WALL = (48, 52, 70)
+COLOR_START = (102, 187, 106)
+COLOR_GOAL = (239, 83, 80)
+COLOR_GRID = (15, 17, 24)
+COLOR_TEXT = (235, 235, 235)
+COLOR_INFO = (144, 164, 174)
+COLOR_PATH_TRAIL = (255, 213, 79)
+COLOR_PATH_ACTIVE = (255, 241, 118)
 
-    if start is None or goal is None:
-        raise ValueError("Maze must contain both 'A' (start) and 'B' (goal).")
-    return start, goal
-
-
-def is_walkable(cell_value):
-    """Return True if the cell can be traversed."""
-    return cell_value != "0"
+DEFAULT_FILES = [
+    "laberinto_1.in.txt",
+    "laberinto_2.in.txt",
+    "laberinto_3.in.txt",
+]
 
 
-def neighbors(maze, node):
-    """Return a list with the walkable neighbors in NESW order."""
-    r, c = node
-    deltas = [(-1, 0), (0, 1), (1, 0), (0, -1)]  # Up, Right, Down, Left
-    result = []
-    for dr, dc in deltas:
-        nr = r + dr
-        nc = c + dc
-        inside_rows = 0 <= nr < len(maze)
-        inside_cols = 0 <= nc < len(maze[0])
-        if inside_rows and inside_cols and is_walkable(maze[nr][nc]):
-            result.append((nr, nc))
-    return result
+@dataclass
+class MazeEntry:
+    file_path: Path
+    grid: Grid
+    start: Coord
+    goal: Coord
+    path: List[Coord]
+    path_lookup: Dict[Coord, int]
+
+    @property
+    def rows(self) -> int:
+        return len(self.grid)
+
+    @property
+    def cols(self) -> int:
+        return len(self.grid[0]) if self.grid else 0
 
 
-def reconstruct_path(parent_map, start, goal):
-    """Rebuild the path from goal back to start using the recorded parents."""
-    if goal not in parent_map:
-        return []
+class AnimationController:
+    """Controls the progression of the path animation across all mazes."""
 
-    path = []
-    current = goal
-    while current is not None:
-        path.append(current)
-        current = parent_map[current]
-    path.reverse()
+    def __init__(self, mazes: List[MazeEntry]):
+        self.mazes = mazes
+        self.index = 0
+        self.step_index = 0
+        self.step_timer = 0.0
+        self.hold_timer = 0.0
+        self.state = "animating"
+        self._configure_maze(0)
 
-    if not path or path[0] != start:
-        return []
-    return path
-
-
-def format_frontier(structure):
-    """Render the queue/stack contents for the console output."""
-    pieces = []
-    for coord in structure:
-        pieces.append(str(coord))
-    return "[" + ", ".join(pieces) + "]"
-
-
-def bfs_search(maze, start, goal):
-    """Breadth-first search that prints its exploration in detail."""
-    queue = deque([start])
-    parent = {start: None}
-
-    step = 0
-    while queue:
-        print("[BFS] Step " + str(step) + ": frontier before visit: " + format_frontier(queue))
-        current = queue.popleft()
-        print("[BFS] Visiting " + str(current))
-
-        if current == goal:
-            print("[BFS] Goal reached at " + str(current))
-            return reconstruct_path(parent, start, goal)
-
-        for neighbor in neighbors(maze, current):
-            if neighbor in parent:
-                continue
-            parent[neighbor] = current
-            queue.append(neighbor)
-            print("[BFS]   Enqueued " + str(neighbor))
-
-        print("[BFS] Frontier after expansion: " + format_frontier(queue) + "\n")
-        step += 1
-
-    print("[BFS] Goal not reachable from start.")
-    return []
-
-
-def dfs_search(maze, start, goal):
-    """Depth-first search (iterative) with detailed console output."""
-    stack = [start]
-    parent = {start: None}
-
-    step = 0
-    while stack:
-        print("[DFS] Step " + str(step) + ": frontier before visit: " + format_frontier(stack))
-        current = stack.pop()
-        print("[DFS] Visiting " + str(current))
-
-        if current == goal:
-            print("[DFS] Goal reached at " + str(current))
-            return reconstruct_path(parent, start, goal)
-
-        for neighbor in neighbors(maze, current):
-            if neighbor in parent:
-                continue
-            parent[neighbor] = current
-            stack.append(neighbor)
-            print("[DFS]   Pushed " + str(neighbor))
-
-        print("[DFS] Frontier after expansion: " + format_frontier(stack) + "\n")
-        step += 1
-
-    print("[DFS] Goal not reachable from start.")
-    return []
-
-
-def path_to_directions(path):
-    """Translate the path into cardinal directions."""
-    direction_map = {
-        (-1, 0): "U",
-        (1, 0): "D",
-        (0, -1): "L",
-        (0, 1): "R",
-    }
-    moves = []
-    for index in range(len(path) - 1):
-        r1, c1 = path[index]
-        r2, c2 = path[index + 1]
-        delta = (r2 - r1, c2 - c1)
-        if delta in direction_map:
-            moves.append(direction_map[delta])
+    def _configure_maze(self, index: int) -> None:
+        self.index = index
+        current_path_len = len(self.current.path)
+        if current_path_len:
+            self.step_index = 1  # show start cell immediately
+            self.state = "animating" if current_path_len > 1 else "hold"
         else:
-            moves.append("?")
-    return "".join(moves)
+            self.step_index = 0
+            self.state = "hold"
+        self.step_timer = 0.0
+        self.hold_timer = 0.0
+
+    @property
+    def current(self) -> MazeEntry:
+        return self.mazes[self.index]
+
+    def update(self, dt_ms: float) -> Tuple[bool, bool]:
+        """Advance animation clocks; returns (finished_all, switched_maze)."""
+        switched = False
+        if self.state == "animating":
+            self.step_timer += dt_ms
+            path_len = len(self.current.path)
+            while self.step_timer >= PATH_STEP_MS and self.step_index < path_len:
+                self.step_timer -= PATH_STEP_MS
+                self.step_index += 1
+            if self.step_index >= path_len:
+                self.state = "hold"
+                self.hold_timer = 0.0
+
+        if self.state == "hold":
+            self.hold_timer += dt_ms
+            if self.hold_timer >= HOLD_AFTER_MAZE_MS:
+                if self.index + 1 >= len(self.mazes):
+                    return True, switched
+                self._configure_maze(self.index + 1)
+                switched = True
+
+        return False, switched
 
 
-def describe_path(label, path):
-    """Print the resulting path in coordinates and directions."""
-    if not path:
-        print(label + " path: No path found.\n")
-        return
+def load_mazes(paths: Sequence[Path]) -> List[MazeEntry]:
+    """Read mazes and compute BFS paths using the existing solver logic."""
+    loaded: List[MazeEntry] = []
+    for path in paths:
+        try:
+            grid, start, goal = read_maze(str(path))
+            _visitados, _raiz, meta = bfs(grid, start, goal)
+            solution = reconstruir(meta)
+            lookup = {coord: idx for idx, coord in enumerate(solution)}
+            loaded.append(MazeEntry(path, grid, start, goal, solution, lookup))
+        except Exception as exc:
+            print(f"[ignorado] {path}: {exc}")
+    if not loaded:
+        raise RuntimeError("no se pudo cargar ningún laberinto válido")
+    return loaded
 
-    directions = path_to_directions(path)
-    if directions == "":
-        directions = "(start equals goal)"
-    print(label + " path (coordinates): " + str(path))
-    print(label + " path (directions): " + directions + "\n")
+
+def compute_window_size(entry: MazeEntry) -> Tuple[int, int]:
+    """Return window size (width, height) for the given maze."""
+    width = entry.cols * CELL_SIZE + OUTER_MARGIN * 2 + INFO_WIDTH
+    height = entry.rows * CELL_SIZE + OUTER_MARGIN + HEADER_HEIGHT
+    return width, height
 
 
-def main():
-    maze_text = """
-    0001001
-    1001010
-    100B100
-    0001000
-    000A100
-    """
-    maze = parse_maze(maze_text)
-    start, goal = locate_points(maze)
+def cell_color(char: str) -> Tuple[int, int, int]:
+    """Base color for a maze cell."""
+    if char == "0":
+        return COLOR_WALL
+    if char == "A":
+        return COLOR_START
+    if char == "B":
+        return COLOR_GOAL
+    return COLOR_FLOOR
 
-    print("=== Breadth-First Search ===")
-    bfs_path = bfs_search(maze, start, goal)
-    describe_path("BFS", bfs_path)
 
-    print("=== Depth-First Search ===")
-    dfs_path = dfs_search(maze, start, goal)
-    describe_path("DFS", dfs_path)
+def draw_header(
+    surface: pygame.Surface, font: pygame.font.Font, lines: Iterable[str]
+) -> None:
+    """Draw informational lines at the top of the window."""
+    y = OUTER_MARGIN // 2
+    for line in lines:
+        text = font.render(line, True, COLOR_TEXT)
+        surface.blit(text, (OUTER_MARGIN, y))
+        y += text.get_height() + 4
+
+
+def draw_legend(
+    surface: pygame.Surface, font: pygame.font.Font, top: int, left: int
+) -> None:
+    """Render a legend explaining colors."""
+    legend_items = [
+        ("Pared", COLOR_WALL),
+        ("Transitable", COLOR_FLOOR),
+        ("Ruta BFS", COLOR_PATH_TRAIL),
+        ("Inicio (A)", COLOR_START),
+        ("Meta (B)", COLOR_GOAL),
+    ]
+    y = top
+    for label, color in legend_items:
+        rect = pygame.Rect(left, y, 20, 20)
+        pygame.draw.rect(surface, color, rect)
+        pygame.draw.rect(surface, COLOR_GRID, rect, 1)
+        text = font.render(label, True, COLOR_INFO)
+        surface.blit(text, (rect.right + 8, y - 1))
+        y += 26
+
+
+def draw_maze(
+    surface: pygame.Surface, font: pygame.font.Font, entry: MazeEntry, step_index: int
+) -> None:
+    # render the maze grid and the progressively drawn solution path
+    surface.fill(COLOR_BG)
+
+    path_len = len(entry.path)
+    progress = min(step_index, path_len)
+    header_lines = [
+        f"{entry.file_path} — {entry.rows} filas x {entry.cols} columnas",
+    ]
+    if path_len:
+        header_lines.append(f"Ruta BFS: {path_len} casillas")
+        header_lines.append(f"Progreso: {progress}/{path_len}")
+    else:
+        header_lines.append("Ruta BFS: sin solución")
+    draw_header(surface, font, header_lines)
+
+    origin_x = OUTER_MARGIN
+    origin_y = HEADER_HEIGHT
+    active_index = progress - 1 if progress else -1
+
+    for row_index, row in enumerate(entry.grid):
+        for col_index, char in enumerate(row):
+            x = origin_x + col_index * CELL_SIZE
+            y = origin_y + row_index * CELL_SIZE
+            rect = pygame.Rect(x, y, CELL_SIZE, CELL_SIZE)
+
+            pygame.draw.rect(surface, cell_color(char), rect)
+            pygame.draw.rect(surface, COLOR_GRID, rect, 1)
+
+            path_order = entry.path_lookup.get((row_index, col_index))
+            if path_order is not None and path_order < progress:
+                shrink = max(10, CELL_SIZE // 3)
+                overlay_rect = rect.inflate(-shrink, -shrink)
+                color = (
+                    COLOR_PATH_ACTIVE
+                    if path_order == active_index
+                    else COLOR_PATH_TRAIL
+                )
+                pygame.draw.rect(surface, color, overlay_rect, border_radius=6)
+
+    legend_x = origin_x + entry.cols * CELL_SIZE + 28
+    legend_y = HEADER_HEIGHT
+    draw_legend(surface, font, legend_y, legend_x)
+
+
+def main() -> None:
+    pygame.init()
+    pygame.font.init()
+    font = pygame.font.SysFont("Menlo", FONT_SIZE)
+
+    if len(sys.argv) > 1:
+        files = [Path(arg) for arg in sys.argv[1:]]
+    else:
+        files = [Path(name) for name in DEFAULT_FILES]
+
+    mazes = load_mazes(files)
+    controller = AnimationController(mazes)
+
+    current_entry = controller.current
+    window_size = compute_window_size(current_entry)
+    screen = pygame.display.set_mode(window_size)
+    pygame.display.set_caption(f"Maze Path Animation — {current_entry.file_path.name}")
+
+    clock = pygame.time.Clock()
+    current_size = window_size
+
+    running = True
+    finished = False
+    while running and not finished:
+        dt = clock.tick(FPS)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+        if not running:
+            break
+
+        finished, switched = controller.update(dt)
+        if switched:
+            current_entry = controller.current
+            new_size = compute_window_size(current_entry)
+            if new_size != current_size:
+                screen = pygame.display.set_mode(new_size)
+                current_size = new_size
+            pygame.display.set_caption(
+                f"Maze Path Animation — {current_entry.file_path.name}"
+            )
+
+        draw_maze(screen, font, controller.current, controller.step_index)
+        pygame.display.flip()
+
+    pygame.quit()
 
 
 if __name__ == "__main__":
